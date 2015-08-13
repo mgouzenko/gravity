@@ -7,16 +7,20 @@ function preload() {
     game.load.atlasJSONHash('fragments', 'assets/fragments.png', 'assets/fragments.json');
     game.load.atlasJSONHash('ship', 'assets/shipsheet.png', 'assets/shipsheet.json');
     game.load.image('moon', 'assets/moon.png');
+    game.load.image('game_over', 'assets/game_over.png');
 
 }
 
-// Globals
+// Constants
 var ANGULAR_VELOCITY = 3;
 var MAX_ACCELERATION = 200;
 var GRAVITY = 6000000;
 var SHIP_SCALE = 0.25;
+var MAX_EXPLOSION_SPEED = 20;
 
 var fragment_map = {
+    PIXEL_WIDTH: 160,
+    PIXEL_HEIGHT: 280,
     WIDTH: 3,
     HEIGHT: 3,
     FRAGMENT_PREFIX: 'fragment_',
@@ -49,6 +53,9 @@ var planet_collision_group;
 // These are the fragments that the ship breaks into.
 var fragment_collision_group;
 
+// Game over text
+var game_over_text;
+
 var sum_of_da_forces = {x:0, y:0};
 
 function planetary_body(xpos, ypos){
@@ -58,13 +65,37 @@ function planetary_body(xpos, ypos){
     this.ypos = ypos;
 }
 
-function planetary_body(sprite_name, scale, sprite_diameter){
+function planetary_body(sprite_name, scale, sprite_diameter, mass){
     this.name = sprite_name;
     this.scale = scale;
     this.radius = sprite_diameter * scale * 0.5;
+    this.mass = mass;
+}
+
+function planet_factory(sprite_name, scale, sprite_diameter){
+    this.name = sprite_name;
+    this.scale = scale;
+    this.sprite_diameter = sprite_diameter;
+
+    this.make_planet = function(size){
+        return new planetary_body(this.name,
+                                  this.scale * size, 
+                                  this.sprite_diameter,
+                                  size * size); 
+    };
 }
 
 var MOON = new planetary_body('moon', 0.25, 250);
+var MOON_FACTORY = new planet_factory('moon', 0.25, 250);
+
+function display_game_over_text(){
+    game_over_text = game.add.sprite(game.camera.width/2,
+                                     game.camera.height/2,
+                                     'game_over')
+    game_over_text.anchor.set(0.5);
+    game_over_text.fixedToCamera = true;
+    game.add.tween(game_over_text.scale).to({x: 0.5, y: 0.5}, 1000, Phaser.Easing.Back.InOut, true);
+}
 
 function explode(ship_body, planet_body){
     ship_body.sprite.kill();
@@ -72,14 +103,27 @@ function explode(ship_body, planet_body){
     var ypos = ship_body.y;
     var xvel = ship_body.velocity.x;
     var yvel = ship_body.velocity.y;
-    fragment = fragments.create(xpos, ypos, 'fragments', fragment_map.get_fragment(0, 0));
-    game.physics.p2.enable(fragment);
-    fragment.body.setCollisionGroup(fragment_collision_group);
-    fragment.body.collides(planet_collision_group);
-    fragment.scale.setTo(SHIP_SCALE, SHIP_SCALE);
-    fragment.body.angle = ship_body.angle;
-    fragment.body.velocity.x = xvel;
-    fragment.body.velocity.y = yvel;
+    function make_random_speed(){
+        var speed = Math.random() * MAX_EXPLOSION_SPEED;
+        console.log(speed);
+        return speed;
+    };
+    for(var i = 0; i < fragment_map.HEIGHT; i++){
+        for(var j = 0; j < fragment_map.WIDTH; j++){
+            
+            fragment = fragments.create(xpos, ypos, 'fragments', fragment_map.get_fragment(i, j));
+            game.physics.p2.enable(fragment);
+            fragment.body.setCollisionGroup(fragment_collision_group);
+            fragment.body.collides(planet_collision_group);
+            fragment.scale.setTo(SHIP_SCALE, SHIP_SCALE);
+            fragment.body.angle = ship_body.angle;
+            fragment.body.velocity.x = -1 * xvel * make_random_speed();//-xvel*15*i;
+            fragment.body.velocity.y = -1 * yvel * make_random_speed();//-yvel*15*j;
+            fragment.body.collideWorldBounds = true;
+        }
+    }
+
+    setTimeout(display_game_over_text, 1000);
 }
 
 function add_ship_to_game(phaser_game){
@@ -114,8 +158,8 @@ function accelerateToObject(obj1, obj2) {
     var y_dist_squared = Math.pow(obj2.y - obj1.y, 2);
     var dist = 5000 + (x_dist_squared + y_dist_squared);
 
-    var new_x_force = Math.cos(angle) * GRAVITY * (1/dist);
-    var new_y_force = Math.sin(angle) * GRAVITY * (1/dist);
+    var new_x_force = Math.cos(angle) * obj2.mass * GRAVITY * (1/dist);
+    var new_y_force = Math.sin(angle) * obj2.mass * GRAVITY * (1/dist);
 
     sum_of_da_forces.x += new_x_force;
     sum_of_da_forces.y += new_y_force; 
@@ -125,16 +169,18 @@ function accelerateToObject(obj1, obj2) {
 function add_planet(group, xpos, ypos, body){
     var planet = group.create(xpos, ypos, body.name);
     game.physics.p2.enable(planet);
+    planet.mass = body.mass;
     planet.scale.setTo(body.scale, body.scale); 
     planet.enableBody = true;
     planet.body.setCircle(body.radius);
     planet.body.static = true;
     planet.body.setCollisionGroup(planet_collision_group);
-    planet.body.collides(player_collision_group);
+    planet.body.collides([player_collision_group, fragment_collision_group]);
 }
 
 
 function create() {
+
     game.world.setBounds(0, 0, 3000, 600);
     
     //  We're going to be using physics, so enable the P2 Physics system
@@ -166,8 +212,8 @@ function create() {
     fragments = game.add.group();
 
     // Add a planet
-    add_planet(planets, 800, 400, MOON);
-    add_planet(planets, 400, 300, MOON);
+    add_planet(planets, 800, 400, MOON_FACTORY.make_planet(1));
+    add_planet(planets, 400, 300, MOON_FACTORY.make_planet(2));
 
     //  Our controls.
     cursors = game.input.keyboard.createCursorKeys();
@@ -179,6 +225,7 @@ function accelerateShipToPlanet(p){
 }
 
 function update() {
+   
     planets.forEachAlive(accelerateShipToPlanet, this); 
     player.body.force.x += sum_of_da_forces.x;
     player.body.force.y += sum_of_da_forces.y;
